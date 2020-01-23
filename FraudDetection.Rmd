@@ -1,0 +1,689 @@
+---
+title: "Click Traffic Fraud Detection in Mobile Application Advertisements"
+author: "Naiara de Almeida Pantuza"
+date: "21/01/2020"
+output: pdf_document
+---
+
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Project developed during the DSA BigData Analystics with R and Microsoft Azure course: available on the kaggle platform
+
+# DESCRIPTION:
+Fraud risk is everywhere, but for companies that advertise online, click fraud can happen at an overwhelming volume, resulting in misleading click data and wasted money. Ad channels can drive up costs by simply clicking on the ad at a large scale.
+China is the largest mobile market in the world and therefore suffers from huge volumes of fradulent traffic. TalkingData, China’s largest independent big data service platform, covers over 70% of active mobile devices nationwide. They've built an IP blacklist and device blacklist.
+In this project, I am supose to build an algorithm that predicts whether a user will download an app after clicking a mobile app ad.
+
+```{r Set work directory}
+# Setting work directory
+setwd("/home/naiara/Documentos/DataScience/FCD/BigDataRAzure/Project_Fraud_Detection")
+```
+All datasets were downloaded in kaggle.
+I chose to work with 10,000,000 lines to avoid processing and storage problems on my computer.
+```{r Getting dataset}
+# Importing train and test datasets
+Azure <- FALSE
+
+if (Azure) {
+  train <- maml.mapInputPort(1)
+  test <- maml.mapInputPort(2)
+}else {
+  # Getting the first 10.000.000 rows of train dataset
+  train <- read.csv(unz("train.csv.zip", "train.csv"), nrows = 10000000)
+  # Getting test dataset
+  test <- read.csv("test.csv")
+  }
+```
+
+# Data cleaning and processing
+
+Here I proceeded with cleaning and data processing.
+
+```{r data cleaning and processing}
+# Checking if there are missing values.
+# Only "attributed_time" has missing values, once tha apps may not be downloaded.
+any(is.na(train[,-7]))
+any(is.na(test))
+
+# Modifying variable types for analysis:
+# Converting categorical variables to factor
+cnames <- c('ip', 'app', 'device', 'os', 'channel')
+for (var in cnames) {
+  train[,var] <- as.factor(train[,var])
+  test[,var] <- as.factor(test[,var])
+}
+
+# Converting target variable "is_attributted" to factor
+train$is_attributed <- as.factor(train$is_attributed)
+
+# Converting temporal variables to datetime format
+train$click_time <- as.POSIXct(train$click_time, tz = Sys.timezone())
+train$attributed_time <- dplyr::na_if(train$attributed_time, "")
+train$attributed_time <- as.POSIXct(train$attributed_time, tz = Sys.timezone())
+test$click_time <- as.POSIXct(test$click_time, tz = Sys.timezone())
+
+# Converting "click_id" from test dataset to factor
+test$click_id <- as.factor(test$click_id)
+
+```
+# Visual analysis and data exploration
+
+Here I visualized training and test datasets and their summaries.
+
+```{r head and summary data}
+# Train dataset head
+head(train)
+
+# Test dataset head
+head(test)
+
+# Train dataset summary
+str(train)
+summary(train)
+
+# Teste dataset summary
+summary(test)
+```
+Including Plots
+
+Check unique values for categorical variables from train dataset sample.
+
+```{r unique}
+# Loading required packages
+library(ggplot2)
+library(dplyr)
+
+# Get the number of unique values for categoriacal dependent variables
+uniq <- sapply(train[,cnames], function(x) {return(length(unique(x)))})
+uniq_data <- data.frame(value=uniq, name=names(uniq), row.names = NULL)
+
+```
+
+Plotting the number of unique values for categoriacal dependent variables
+```{r plots 1}
+
+# Bar plot of the number of single values
+uniq_plot <- ggplot(uniq_data, aes(x=name, y=value, fill=name)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Number of unique values per feature (from 10.000.000 first rows)") +
+  xlab("Feature") +
+  ylab("log(unique count)") +
+  scale_y_log10(limits = c(1,1e6)) +
+  geom_text(aes(label = sprintf("%d", value), y=value),  vjust = -0.5) +
+  theme(axis.text.x = element_text(hjust = 0.5, size=11,color="black")) +
+  theme(axis.text.y = element_text(hjust = 0.5, size=10,color="black"))
+
+uniq_plot
+```
+As noted in the graph, the variables have many levels.
+
+Summarizing attribute variables from downloaded application logs.
+```{r summarizing attribute variables from downloaded application logs}
+# Filtering and summarizing attribute variables from downloaded application logs
+downloaded <- train[train$is_attributed == "1", c("attributed_time", "is_attributed")]
+summary(downloaded)
+```
+
+Plot proportion of apps download and not download
+```{r plots 2}
+# Plotting proportion of apps download and not download 
+app_prop <- count(group_by(train[,c("app", "is_attributed")], is_attributed))
+app_prop$n <- round(app_prop$n/sum(app_prop$n)*100, 2)
+app_prop$is_attributed <- c("Not Downloaded (0)", "App Downloaded (1)")
+
+appPropPlot <- ggplot(app_prop, aes(x=is_attributed, y=n)) +
+  geom_bar(stat = "identity", fill="darkred") +
+  ggtitle("App Downloaded x Not Downloades") +
+  ylab("Percentage") +
+  ylim(0,120) +
+  geom_text(aes(label = sprintf("%.2f%%", n), y=n),  vjust = -0.5) +
+  theme(axis.text.x = element_text(hjust = 0.5, size=11,color="black")) +
+  theme(axis.text.y = element_text(hjust = 0.5, size=10,color="black"))
+
+appPropPlot
+
+```
+As observed less than one percent of clicks were converted to downloads.
+
+Analysing ips frequency
+```{r freq}
+# Count 10 most clicked ips and their respective frequencies
+temp <- as.data.frame(table(train$ip))
+colnames(temp) <- c("ip", "count")
+temp <- temp[order(temp$count, decreasing = TRUE),]
+rownames(temp) <- 1:length(rownames(temp))
+temp <- temp[1:10,]
+temp
+
+# Count 10 most clicked downloaded ips and their respective frequencies
+temp_downloaded <- as.data.frame(table(train[train$is_attributed == "1",]$ip))
+colnames(temp_downloaded) <- c("downloaded_ip", "count_downloads")
+temp_downloaded <- temp_downloaded[order(temp_downloaded$count, decreasing = TRUE),]
+rownames(temp_downloaded) <- 1:length(rownames(temp_downloaded))
+temp_downloaded <- temp_downloaded[1:10,]
+temp_downloaded
+
+# Checking coincide between 10 most clicked apss and the 10 most clicked downloaded apss
+table(c(temp$ip,temp_downloaded$downloaded_ip))
+
+```
+Eight ips with the highest number of clicks were most downloaded.
+
+Get summary of downloaded app dataset
+```{r summary}
+# Get statistic data from downloaded ip dataset
+# Minimum, maximum, average, median, quartiles.
+summary(as.integer(train[train$is_attributed == "1", "ip"]))
+
+# Count values
+length(as.numeric(train[train$is_attributed == "1", "ip"]))
+
+# Count unique values
+length(unique(as.integer(train[train$is_attributed == "1", "ip"])))
+
+```
+Analysing Most Popular IPs
+Getting the 300 most clicked ips, respective count of clickes and conversion rates (clicks converted to download).
+
+Exibing table results:
+```{r table}
+# Converting "is_attributed" to numeric temporarily to plotting
+train$is_attributed <- as.numeric(train$is_attributed)-1
+
+# Conversion Rates over Counts of 300 Most Popular IPs
+# Exibing table results
+count_rate <- train %>% 
+  group_by(ip) %>%
+  summarise(click_count=n(), prop_downloaded = round(sum(is_attributed)/n(), 4)) %>%
+  arrange(desc(click_count)) %>%
+  slice(1:300) %>%
+  data.frame()
+
+count_rate
+
+```
+Exibing plot results:
+
+```{r plot 4}
+# Obtain the coefficient so that both y axes are on the same scale 
+count_rate$num <- seq(1:nrow(count_rate))
+MAX <- max(count_rate$click_count)
+mx <- max(count_rate$prop_downloaded)
+coef <- mx/MAX
+
+# Disabling scientific notation in R
+options(scipen = 999)
+
+# Plotting Conversion Rates over Counts of 300 Most Popular IPs
+ggplot(count_rate, aes(x=num)) +
+  geom_line(aes(x=num, y=click_count), color="darkred") +
+  geom_line(aes(x=num, y=prop_downloaded/coef), color="darkgreen") +
+  ggtitle("Conversion Rates over Counts of 300 Most Popular IPs") +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Number of clicks",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*coef, name="Proportion Downloaded")
+  ) +
+  theme(
+    axis.title.y = element_text(color = "darkred", size=13),
+    axis.title.y.right = element_text(color = "darkgreen", size=13),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  xlab("")
+
+```
+According to the graph, the number of clicks and conversion rate for ips are not significantly correlated.
+
+Repeating the previous analysis for applications, operating systems, devices and channels.
+
+Getting the 100 most clicked apps, respective count of clickes and conversion rates (clicks converted to download) and exibing table and plot results:
+```{r graphs 1}
+# Conversion Rates over Counts of 100 Most Popular Apps
+count_rate <- train %>% 
+  group_by(app) %>%
+  summarise(click_count=n(), prop_downloaded = round(sum(is_attributed)/n(), 4)) %>%
+  arrange(desc(click_count)) %>%
+  slice(1:100) %>%
+  data.frame()
+
+count_rate
+
+# Obtain the coefficient so that both y axes are on the same scale 
+count_rate$num <- seq(1:nrow(count_rate))
+MAX <- max(count_rate$click_count)
+mx <- max(count_rate$prop_downloaded)
+coef <- mx/MAX
+
+# Plotting Conversion Rates over Counts of 100 Most Popular Apps
+ggplot(count_rate, aes(x=num)) +
+  geom_line(aes(x=num, y=click_count), color="darkred") +
+  geom_line(aes(x=num, y=prop_downloaded/coef), color="darkgreen") +
+  ggtitle("Conversion Rates over Counts of 100 Most Popular Apps") +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Number of clicks",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*coef, name="Proportion Downloaded")
+  ) +
+  theme(
+    axis.title.y = element_text(color = "darkred", size=13),
+    axis.title.y.right = element_text(color = "darkgreen", size=13),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  xlab("")
+
+```
+According to the graph, the number of clicks and conversion rate for apps are not significantly correlated.
+
+Getting the 100 most clicked Operational Systems, respective count of clickes and conversion rates (clicks converted to download) and exibing table and plot results:
+```{r graphs 2}
+# Conversion Rates over Counts of Most Popular Operational Systems
+count_rate <- train %>% 
+  group_by(os) %>%
+  summarise(click_count=n(), prop_downloaded = round(sum(is_attributed)/n(), 4)) %>%
+  arrange(desc(click_count)) %>%
+  slice(1:100) %>%
+  data.frame()
+
+count_rate
+
+# Obtain the coefficient so that both y axes are on the same scale 
+count_rate$num <- seq(1:nrow(count_rate))
+MAX <- max(count_rate$click_count)
+mx <- max(count_rate$prop_downloaded)
+coef <- mx/MAX
+
+# Plotting Conversion Rates over Counts of 100 Most Popular Operating Systems
+ggplot(count_rate, aes(x=num)) +
+  geom_line(aes(x=num, y=click_count), color="darkred") +
+  geom_line(aes(x=num, y=prop_downloaded/coef), color="darkgreen") +
+  ggtitle("Conversion Rates over Counts of 100 Most Popular Operating Systems") +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Number of clicks",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*coef, name="Proportion Downloaded")
+  ) +
+  theme(
+    axis.title.y = element_text(color = "darkred", size=13),
+    axis.title.y.right = element_text(color = "darkgreen", size=13),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  xlab("")
+
+```
+According to the graph, the number of clicks and conversion rate for Operational Systems are not significantly correlated.
+
+Getting the 100 most clicked devices, respective count of clickes and conversion rates (clicks converted to download) and exibing table and plot results:
+```{r graphs 3}
+# Conversion Rates and Counts of Most Popular by device
+count_rate <- train %>% 
+  group_by(device) %>%
+  summarise(click_count=n(), prop_downloaded = round(sum(is_attributed)/n(), 4)) %>%
+  arrange(desc(click_count)) %>%
+  slice(1:100) %>%
+  data.frame()
+
+count_rate
+
+# Obtain the coefficient so that both y axes are on the same scale 
+count_rate$num <- seq(1:nrow(count_rate))
+MAX <- max(count_rate$click_count)
+mx <- max(count_rate$prop_downloaded)
+coef <- mx/MAX
+
+# Plotting
+ggplot(count_rate, aes(x=num)) +
+  geom_line(aes(x=num, y=click_count), color="darkred") +
+  geom_line(aes(x=num, y=prop_downloaded/coef), color="darkgreen") +
+  ggtitle("Conversion Rates over Counts of 100 Most Popular Devices") +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Number of clicks",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*coef, name="Proportion Downloaded")
+  ) +
+  theme(
+    axis.title.y = element_text(color = "darkred", size=13),
+    axis.title.y.right = element_text(color = "darkgreen", size=13),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  xlab("")
+
+```
+According to the graph, the number of clicks and conversion rate for devices are not significantly correlated.
+
+Getting the 100 most clicked channels, respective count of clickes and conversion rates (clicks converted to download) and exibing table and plot results:
+```{r graphs 4}
+# Conversion Rates over Counts of Most Popular Channels
+count_rate <- train %>% 
+  group_by(channel) %>%
+  summarise(click_count=n(), prop_downloaded = round(sum(is_attributed)/n(), 4)) %>%
+  arrange(desc(click_count)) %>%
+  slice(1:100) %>%
+  data.frame()
+
+count_rate
+
+# Obtain the coefficient so that both y axes are on the same scale 
+count_rate$num <- seq(1:nrow(count_rate))
+MAX <- max(count_rate$click_count)
+mx <- max(count_rate$prop_downloaded)
+coef <- mx/MAX
+
+# Plotting
+ggplot(count_rate, aes(x=num)) +
+  geom_line(aes(x=num, y=click_count), color="darkred") +
+  geom_line(aes(x=num, y=prop_downloaded/coef), color="darkgreen") +
+  ggtitle("Conversion Rates over Counts of 100 Most Popular Channels") +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Number of clicks",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*coef, name="Proportion Downloaded")
+  ) +
+  theme(
+    axis.title.y = element_text(color = "darkred", size=13),
+    axis.title.y.right = element_text(color = "darkgreen", size=13),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  xlab("")
+```
+According to the graph, the number of clicks and conversion rate for channels are not significantly correlated.
+
+## Time Patterns
+
+The analysis of temporal patterns will be made with the sample provided by the kaggle. The first lines of the dataset are organized by time and therefore are not random. Thus, they are inappropriate for detecting temporal patterns.
+
+Getting and treating the random sample train dataset:
+converting datetime variables to POSIXct format and rounding "click_time" variable's hours.
+```{r data}
+# Importing a random training dataset sample for time pattern analysis
+sampleTrain <- read.csv("train_sample.csv")
+
+head(sampleTrain)
+
+#convert click_time and attributed_time to time series
+sampleTrain$attributed_time <- dplyr::na_if(sampleTrain$attributed_time, "")
+sampleTrain$attributed_time <- as.POSIXct(sampleTrain$attributed_time, tz = Sys.timezone())
+sampleTrain$click_time <- as.POSIXct(sampleTrain$click_time, tz = Sys.timezone())
+
+# Convert "is_attributed to numeric
+sampleTrain$is_attributed <- as.numeric(sampleTrain$is_attributed)
+
+#round the time to nearest hour
+sampleTrain$click_round <- lubridate::round_date(sampleTrain$click_time, "hour")
+
+```
+Temporal anaylis: checking for hourly patterns by tables and plotting graphs.
+
+```{r pattern}
+# Checking for hourly patterns
+count_rate <- sampleTrain[,c("click_round", "is_attributed")] %>% 
+  group_by(click_round) %>%
+  summarise(click_count=n(), conversion_rate = round(sum(is_attributed)/n(), 4)) %>%
+  data.frame()
+
+head(count_rate, 100)
+
+# Plotting
+require(gridExtra)
+
+# Plotting hourly clicks
+plot1 <- ggplot(count_rate, aes(x=click_round)) +
+  geom_line(aes(x=click_round, y=click_count), color="darkred") +
+  ggtitle("Hourly click frequency") +
+  scale_y_continuous(name = "Number of clicks") +
+  scale_x_datetime(labels = scales::date_format("%H:%M\n%d-%b\n%Y"), date_breaks = "12 hours") +
+  theme(
+    axis.title.y = element_text(color = "black", size=13),
+    axis.text.x= element_text(color = "black"),
+    axis.text.y= element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Plotting hourly conversion rate
+plot2 <- ggplot(count_rate, aes(x=click_round)) +
+  geom_line(aes(x=click_round, y=conversion_rate), color="darkblue") +
+  ggtitle("Hourly conversion rate") +
+  scale_y_continuous(name = "Conversion rate") +
+  scale_x_datetime(labels = scales::date_format("%H:%M\n%d-%b\n%Y"), date_breaks = "12 hours",
+                   limits = ) +
+  theme(
+    axis.title.y = element_text(color = "black", size=13),
+    axis.text.x= element_text(color = "black"),
+    axis.text.y= element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+grid.arrange(plot1, plot2, nrow = 2)
+
+```
+Looking at the graph, I noticed that the click count and conversion rate for downloads do not appear to be significantly correlated.
+
+Extracting hour from "click_time" variable and getting the number of clicks and conversion rate by hour.
+Exibing table and graphs:
+```{r patterns}
+# Extract hour from "click_time" and add to sample train dataset
+sampleTrain$click_hour <- as.factor(lubridate::hour(sampleTrain$click_time))
+
+# Getting number of clicks by hour
+count_rate <- sampleTrain[,c("click_hour", "is_attributed")] %>% 
+  group_by(click_hour) %>%
+  summarise(click_count=n(), conversion_rate = round(mean(is_attributed), 4)) %>%
+  data.frame()
+
+# Visualizing data.frame
+View(count_rate)
+
+# Plotting number of clicks by hour
+ggplot(count_rate, aes(x=click_hour, y=click_count)) +
+  geom_bar(stat = "identity", fill="purple", width = 0.5) +
+  geom_line( aes(x=as.numeric(click_hour), y=click_count)) +
+  ggtitle("Hourly click frequency") +
+  scale_y_continuous(name = "Count of clicks") +
+  theme(
+    axis.title.y = element_text(color = "black", size=13),
+    axis.text.x= element_text(color = "black"),
+    axis.text.y= element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+
+# Plotting hourly conversion rate
+ggplot(count_rate, aes(x=click_hour, y=conversion_rate)) +
+  geom_bar(stat = "identity", fill="purple", width = 0.5) +
+  geom_line( aes(x=as.numeric(click_hour), y=conversion_rate)) +
+  ggtitle("Hourly conversion rate") +
+  scale_y_continuous(name = "Conversion rate") +
+  theme(
+    axis.title.y = element_text(color = "black", size=13),
+    axis.text.x= element_text(color = "black"),
+    axis.text.y= element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+```
+Apparently, fewer clicks occur between 27 and 22 hours and fewer downloads at 16, 17, 19 and 22 hours.
+
+Plotting conversion rate and count of clicks to check if both variables correlate:
+
+```{r plot 5}
+# Plotting conversion rate and count of clicks to check if the variables correlate
+# Obtain the coefficient so that both y axes are on the same scale 
+MAX <- max(count_rate$click_count)
+mx <- max(count_rate$conversion_rate)
+coef <- mx/MAX
+
+# Plotting
+ggplot(count_rate, aes(x=num)) +
+  geom_line(aes(x=as.numeric(click_hour), y=click_count, color="click time")) +
+  geom_line(aes(x=as.numeric(click_hour), y=conversion_rate/coef, color="conversion rate")) +
+  ggtitle("Conversion rates and click count by hour") +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Count of clicks",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*coef, name="Conversion Rate")
+  ) + xlab("Hour") +
+  theme(
+    axis.title.y = element_text(color = "purple", size=13),
+    axis.title.x = element_text(color = "black", size=13),
+    axis.title.y.right = element_text(color = "darkred", size=13),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  scale_color_manual(values = c("purple", "darkred")) 
+
+```
+According to the graph, the variables appear to have a weak correlation.
+
+Here, I check the time difference between click_time and it's conversion to download (attributed_time) on sample train dataset:
+visualizing and summarizing
+```{r plot 6}
+# Checking the time difference between clicking add and download it
+sampleTrain$timeDiff <- hms::as_hms(sampleTrain$attributed_time - sampleTrain$click_time)
+
+# Checking first rows and the time passaed between click and download
+head(sampleTrain[sampleTrain$is_attributed == 1,], 15)
+
+# Getting time passed summary
+as.data.frame(lapply(summary(as.numeric(sampleTrain[sampleTrain$is_attributed == 1, 
+                                                    "timeDiff"])), hms::as_hms))
+```
+Here I check the time difference between click_time and it's conversion to download (attributed_time) on first 10.000.000 rows of train dataset:
+```{r summary 2}
+# Checking the time difference between clicking add and download it
+# on the first 10.000.000 rows of train datset
+train$timeDiff <- hms::as_hms(train$attributed_time - train$click_time)
+
+# Summary
+as.data.frame(lapply(summary(as.numeric(train[train$is_attributed == 1, 
+                                                    "timeDiff"])), hms::as_hms))
+```
+The difference varias from 0 to almost 24 hours (one day) on first rows of train dataset.
+
+# Feature Selection
+
+In this script the selection of characteristics is performed for the creation of the model.
+I used randomForest algorithm to measure variables' importance. So, I converted categorical dependent variables to integer.
+Due to my machine's processing and memory limitations, I worked with random samples from the training and test datasets to build and evaluate the model.
+
+```{r feature}
+# Set seed
+set.seed(123)
+
+# Feature selection using randomForest package
+# load the library
+library(randomForest)
+
+# Converting target variable to factor
+train$is_attributed <- as.factor(train$is_attributed)
+
+# Converting dependents variables to integer to run random forest algorithm
+cnames <- c('ip', 'app', 'device', 'os', 'channel')
+for (var in cnames) {
+  train[,var] <- as.integer(train[,var])
+  test[,var] <- as.integer(test[,var])
+}
+
+# Due to my machine's processing and memory limitations, I will work with random samples 
+# from the training and test datasets to build and evaluate the model
+index <- sample(1:nrow(train), 100000)
+train_data <- train[index,]
+
+# Creating random forest model measuring importance
+model <- randomForest( is_attributed ~ ip + app + device + os + channel + click_time,
+                       data = train_data,
+                       ntree = 100,
+                       nodesize = 10,
+                       importance = TRUE)
+
+# Plotting estimate variable importance
+varImpPlot(model)
+
+```
+The dataset has few variables so I will make the first version of the model using all but (attribute_time).
+
+# Model construction and evaluation
+
+In this script, the prediction model is created. Then, the prediction for the test data set is made and the model is evaluated.
+Due to my machine's processing and memory limitations, I will work with random samples from the training and test datasets on proportion 70% training to 30% test to build and evaluate the model.
+I used random forest algorithm again to build the model. Then I assessed its efficiency with a matrix of confusion, and accuracy.
+"sample_submission.csv" file contains correct classification for test dataset.
+
+Getting samples of train and test datasets and and treating it.
+```{r model}
+# Getting the correct classification for test dataset
+test_result <- read.csv("sample_submission.csv")
+
+# Getting smaller samples of trein and test datasets
+# on proportion 70% training to 30% test
+index <- sample(1:nrow(train), 100000)
+train_data <- train[index, ]
+
+str(train_data)
+
+index <- sample(1:nrow(test), 42857)
+test_data <- test[index,]
+test_data <- merge(test_data, test_result[index,], by.x="click_id", by.y="click_id")
+test_data$click_id <- NULL
+
+# Converting dependent variables to integer before creating model
+# using random forest algorithm
+cnames <- c('ip', 'app', 'device', 'os', 'channel')
+for (var in cnames) {
+  train_data[,var] <- as.integer(train_data[,var])
+  test_data[,var] <- as.integer(test_data[,var])
+}
+
+# Emphasize the levels of the target variable
+# since I used a random sample to build the model
+levels(train_data$is_attributed) <- c("0", "1")
+
+```
+Creating and printing model:
+```{r model 2}
+# Creating model
+model <- randomForest( is_attributed ~ ip + app + device + os + channel + click_time,
+                       data = train_data,
+                       ntree = 100,
+                       nodesize = 10)
+
+# Print model
+print(model)
+```
+Predicting classification using sample test dataset and building a data.frame containing columns: expected results and correct results.
+```{r predict}
+# Generating predictions in test data
+pred <- data.frame(observed = test_data$is_attributed,
+                        predicted = predict(model, newdata = test_data[,1:6]))
+
+pred$observed <- as.factor(pred$observed)
+levels(pred$observed) = c("0", "1")
+levels(pred$predicted) = c("0", "1")
+
+# Visualizing the results
+View(pred)
+
+```
+Evaluating model
+```{r evaluate}
+# Evaluating the model
+# Generating a confusion matrix
+caret::confusionMatrix(pred$observed, pred$predicted)
+
+```
+The model created has the model created has an accuracy of 0.9996. Besides, it's a efficient model. However as the tests were done with a small sample I cannot say that it is an efficient model. The sample may not contemplate positive oficial results (downloaded apps).
+
+
+
+
