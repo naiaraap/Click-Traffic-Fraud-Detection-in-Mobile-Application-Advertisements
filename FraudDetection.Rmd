@@ -36,10 +36,10 @@ if (Azure) {
   train <- maml.mapInputPort(1)
   test <- maml.mapInputPort(2)
 }else {
-  # Getting the first 10.000.000 rows of train dataset
-  train <- read.csv(unz("train.csv.zip", "train.csv"), nrows = 10000000)
+  # Getting the first 10.000.000 rows of train dataset (train.zip file)
+  train <- read.csv(unz("train.zip", "train.csv"))
   # Getting test dataset
-  test <- read.csv("test.csv")
+  test <- read.csv(unz("test.zip", "test.csv"))
   }
 ```
 
