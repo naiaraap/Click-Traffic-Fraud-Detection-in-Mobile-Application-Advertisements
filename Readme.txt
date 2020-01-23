@@ -7,6 +7,8 @@ DESCRIPTION: Fraud risk is everywhere, but for companies that advertise online, 
 All datasets are available on kaggle. Link for download: https://www.kaggle.com/c/talkingdata-adtracking-fraud-detection/data.
 
 The scripts were developed in R language in Rstudio and must be executed in the following sequence:FraudDetDataMunging.R, FraudDetFeatureSelection.R and FraudDetModel.R.
+The folder "Graphs" contains all graphs generated during execution scrips.
+The file FraudDetection.pdf contains documented code and the outputs, like tables and graphs.
 
 Operational System: Linux, Ubuntu v.18.04.1
 CPU Capacity: 3100MHz
